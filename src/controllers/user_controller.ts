@@ -240,38 +240,66 @@ export class UserController {
 
   // NEW: GET /users/:address/profile - Get full user profile with contracts
   static async getUserProfile(req: Request, res: Response): Promise<void> {
-    try {
-      const { address } = req.params
-      
-      if (!address) {
-        res.status(400).json({
-          success: false,
-          message: 'Address parameter is required'
-        })
-        return
-      }
-
-      const userProfile = await UserService.getUserWithContracts(address)
-      
-      if (!userProfile) {
-        res.status(404).json({
-          success: false,
-          message: 'User not found'
-        })
-        return
-      }
-
-      res.status(200).json({
-        success: true,
-        data: userProfile
-      })
-    } catch (error) {
-      res.status(500).json({
+  try {
+    const { address } = req.params
+    
+    if (!address) {
+      res.status(400).json({
         success: false,
-        message: error instanceof Error ? error.message : 'Unknown error occurred'
+        message: 'Address parameter is required'
       })
+      return
     }
+
+    // Try to get existing user first
+    let userProfile = await UserService.getUserWithContracts(address)
+    
+    // If user doesn't exist, create them automatically
+    if (!userProfile) {
+      console.log(`🆕 Creating new user profile for: ${address}`)
+      
+      try {
+        // Create new user with default values
+        const newUser = await UserService.createUser({
+          address,
+          score: 0
+        })
+        
+        console.log(`✅ Created user: ${address}`)
+        
+        // Get the full profile with contracts (will be empty initially)
+        userProfile = await UserService.getUserWithContracts(address)
+      } catch (createError) {
+        console.error(`❌ Failed to create user ${address}:`, createError)
+        
+        // If creation fails, return a minimal profile
+        userProfile = {
+          address,
+          created_at: new Date().toISOString(),
+          score: 0,
+          username: null,
+          bio: null,
+          profile_picture: null,
+          activeContracts: [],
+          contractHistory: [],
+          totalContracts: 0,
+          successRate: 0
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: userProfile
+    })
+  } catch (error) {
+    console.error('Error in getUserProfile:', error)
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    })
   }
+}
 
   // NEW: GET /users/:address/contracts - Get user's contracts separated by status
   static async getUserContracts(req: Request, res: Response): Promise<void> {
