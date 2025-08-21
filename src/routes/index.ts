@@ -67,8 +67,10 @@ try {
   router.get('/contracts/pending', ContractController.getPendingContracts)
   router.get('/contracts/:id', ContractController.getContractById)
   
+  // REMOVED AUTH FROM CONTRACT CREATION
+  router.post('/contracts', ContractController.createContract) // No auth required now
+  
   // Protected contract routes
-  router.post('/contracts', authMiddleware, ContractController.createContract)
   router.put('/contracts/:id', authMiddleware, ContractController.updateContract)
   router.delete('/contracts/:id', authMiddleware, ContractController.deleteContract)
   router.put('/contracts/:id/complete', authMiddleware, ContractController.markContractCompleted)

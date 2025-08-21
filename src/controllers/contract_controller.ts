@@ -55,32 +55,40 @@ export class ContractController {
     }
   }
 
-  // POST /contracts
+  // POST /contracts - Updated to handle frontend field names
   static async createContract(req: Request, res: Response): Promise<void> {
     try {
-      const { condition1, condition2, mint, is_completed = false } = req.body
+      const { tokenMint, tokenAmount, condition1Value, condition2Value, userAddress } = req.body
 
-      if (condition1 === undefined || !condition2 || !mint) {
+      console.log('📥 Received contract data:', { tokenMint, tokenAmount, condition1Value, condition2Value, userAddress })
+
+      // Validate required fields
+      if (!tokenMint || tokenAmount === undefined || condition1Value === undefined || !condition2Value || !userAddress) {
         res.status(400).json({
           success: false,
-          message: 'condition1, condition2, and mint are required'
+          message: 'tokenMint, tokenAmount, condition1Value, condition2Value, and userAddress are required'
         })
         return
       }
 
-      const contract = await ContractService.createContract({
-        condition1,
-        condition2,
-        mint,
-        is_completed
+      // Create contract and user_contract in a transaction
+      const result = await ContractService.createContractWithUserContract({
+        mint: tokenMint.trim(),
+        condition1: condition1Value,
+        condition2: condition2Value,
+        userAddress: userAddress.trim(),
+        supply: tokenAmount
       })
+
+      console.log('✅ Contract and user_contract created:', result)
       
       res.status(201).json({
         success: true,
-        data: contract,
+        data: result.contract,
         message: 'Contract created successfully'
       })
     } catch (error) {
+      console.error('❌ Contract creation error:', error)
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : 'Unknown error occurred'

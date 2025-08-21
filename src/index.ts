@@ -14,7 +14,7 @@ console.log('JWT_SECRET:', process.env.JWT_SECRET ? 'Found ✅' : 'Missing ❌')
 import routes from './routes';
 
 const app = express();
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 3001; // Changed from 8000 to 3001
 
 // Middleware
 app.use(cors({
