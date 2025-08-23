@@ -20,6 +20,7 @@ try {
   const { PaymentController } = require('../controllers/payment_controller')
   const { UserContractController } = require('../controllers/user_contract_controller')
   const { AuthController } = require('../controllers/auth_controller')
+  const { TokenController } = require('../controllers/token_controller') // Added token controller
   
   // Import middleware
   const { authMiddleware, optionalAuthMiddleware, requireWalletOwnership } = require('../middleware/auth_middleware')
@@ -56,6 +57,13 @@ try {
   
   // Admin routes (require auth but not ownership check)
   router.put('/users/:address/score', authMiddleware, UserController.updateUserScore) // Admin only in production
+
+  // =====================================================
+  // TOKEN ROUTES
+  // =====================================================
+  
+  // Public token routes
+  router.post('/tokens/check-balance', TokenController.checkTokenBalance)
 
   // =====================================================
   // CONTRACT ROUTES
@@ -142,6 +150,15 @@ try {
         token: 'test-token',
         session: { publicKey: 'test-key' }
       }
+    })
+  })
+
+  // Fallback token routes for testing
+  router.post('/tokens/check-balance', (req, res) => {
+    res.json({
+      success: false,
+      message: 'TokenController not found - fallback route',
+      error: 'Missing token_controller.ts file'
     })
   })
 }

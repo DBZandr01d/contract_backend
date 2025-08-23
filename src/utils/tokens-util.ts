@@ -28,6 +28,8 @@ interface TokenBalanceResult {
   success: boolean;
   hasEnoughBalance?: boolean;
   error?: string;
+  actualBalance?: string;
+  requiredBalance?: string;
 }
 
 export async function checkTokenBalance(
@@ -71,36 +73,48 @@ export async function checkTokenBalance(
       userPubKey
     );
 
+    // Convert required token amount to raw units (multiply by 10^decimals)
+    const requiredAmountRaw = BigInt(Math.floor(tokenAmount * Math.pow(10, decimals)));
+    const requiredBalanceFormatted = tokenAmount.toString();
+
     // Get the token account info
     let tokenAccountInfo;
     try {
       tokenAccountInfo = await getAccount(connection, associatedTokenAccount);
     } catch (error) {
       // If account doesn't exist, balance is 0
+      const actualBalanceFormatted = "0";
+      
       if (tokenAmount <= 0) {
         return {
           success: true,
-          hasEnoughBalance: true
+          hasEnoughBalance: true,
+          actualBalance: actualBalanceFormatted,
+          requiredBalance: requiredBalanceFormatted
         };
       }
       return {
         success: true,
-        hasEnoughBalance: false
+        hasEnoughBalance: false,
+        actualBalance: actualBalanceFormatted,
+        requiredBalance: requiredBalanceFormatted
       };
     }
 
     // Get current balance in raw units
     const currentBalance = tokenAccountInfo.amount;
 
-    // Convert token amount to raw units (multiply by 10^decimals)
-    const requiredAmountRaw = BigInt(Math.floor(tokenAmount * Math.pow(10, decimals)));
+    // Convert current balance back to human-readable format
+    const actualBalanceFormatted = (Number(currentBalance) / Math.pow(10, decimals)).toString();
 
     // Compare balances
     const hasEnoughBalance = currentBalance >= requiredAmountRaw;
 
     return {
       success: true,
-      hasEnoughBalance
+      hasEnoughBalance,
+      actualBalance: actualBalanceFormatted,
+      requiredBalance: requiredBalanceFormatted
     };
 
   } catch (error) {
@@ -110,6 +124,7 @@ export async function checkTokenBalance(
     };
   }
 }
+
 /*
 // Example usage:
 async function testFunction() {
@@ -121,10 +136,15 @@ async function testFunction() {
   
   if (result.success) {
     console.log('Has enough balance:', result.hasEnoughBalance);
+    console.log('Actual balance:', result.actualBalance);
+    console.log('Required balance:', result.requiredBalance);
   } else {
     console.error('Error:', result.error);
   }
 }
 
 // Call the test function
-testFunction().catch(console.error);*/
+testFunction().catch(console.error);
+*/
+
+module.exports = { checkTokenBalance }
