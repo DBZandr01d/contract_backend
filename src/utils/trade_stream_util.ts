@@ -3,12 +3,23 @@ import WebSocket from 'ws';
 interface TradeMessage {
   signature: string;
   mint: string;
-  sol_amount: number;
-  token_amount: number;
-  is_buy: boolean;
-  user: string;
-  timestamp: number;
-  tx_index: number;
+  traderPublicKey: string;
+  txType: 'buy' | 'sell';
+  tokenAmount: number;
+  solAmount: number;
+  newTokenBalance: number;
+  bondingCurveKey: string;
+  vTokensInBondingCurve: number;
+  vSolInBondingCurve: number;
+  marketCapSol: number;
+  pool: string;
+  // Legacy fields for backward compatibility
+  sol_amount?: number;
+  token_amount?: number;
+  is_buy?: boolean;
+  user?: string;
+  timestamp?: number;
+  tx_index?: number;
   [key: string]: any; // For any additional fields from pump.fun
 }
 
@@ -25,11 +36,20 @@ interface StreamCallbacks {
   onDisconnect?: () => void;
 }
 
+interface StreamConfig {
+  mintAddress: string;
+  signers: string[];
+  condition1: number;
+  condition2: Date;
+  contractId: number;
+  callbacks: StreamCallbacks;
+}
+
 class TradeStreamManager {
   private ws: WebSocket | null = null;
   private isConnecting: boolean = false;
   private subscriptions: Set<string> = new Set();
-  private callbacks: Map<string, StreamCallbacks> = new Map();
+  private streamConfigs: Map<string, StreamConfig> = new Map();
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 1000; // Start with 1 second
@@ -58,9 +78,9 @@ class TradeStreamManager {
           });
 
           // Call onConnect callbacks
-          this.callbacks.forEach(callback => {
-            if (callback.onConnect) {
-              callback.onConnect();
+          this.streamConfigs.forEach(config => {
+            if (config.callbacks.onConnect) {
+              config.callbacks.onConnect();
             }
           });
 
@@ -81,9 +101,9 @@ class TradeStreamManager {
           this.isConnecting = false;
           
           // Call onError callbacks
-          this.callbacks.forEach(callback => {
-            if (callback.onError) {
-              callback.onError(`WebSocket error: ${error.message}`);
+          this.streamConfigs.forEach(config => {
+            if (config.callbacks.onError) {
+              config.callbacks.onError(`WebSocket error: ${error.message}`);
             }
           });
 
@@ -96,9 +116,9 @@ class TradeStreamManager {
           this.ws = null;
           
           // Call onDisconnect callbacks
-          this.callbacks.forEach(callback => {
-            if (callback.onDisconnect) {
-              callback.onDisconnect();
+          this.streamConfigs.forEach(config => {
+            if (config.callbacks.onDisconnect) {
+              config.callbacks.onDisconnect();
             }
           });
 
@@ -121,9 +141,9 @@ class TradeStreamManager {
       console.error('Max reconnection attempts reached. Giving up.');
       
       // Call onError callbacks
-      this.callbacks.forEach(callback => {
-        if (callback.onError) {
-          callback.onError('Max reconnection attempts reached');
+      this.streamConfigs.forEach(config => {
+        if (config.callbacks.onError) {
+          config.callbacks.onError('Max reconnection attempts reached');
         }
       });
       return;
@@ -156,6 +176,26 @@ class TradeStreamManager {
     console.log(`Subscribed to token trades for: ${mintAddress}`);
   }
 
+  private shouldProcessTrade(trade: TradeMessage, config: StreamConfig): boolean {
+    try {
+      // Check signers condition - if signers list is provided and not empty, only process trades from those signers
+      if (config.signers && config.signers.length > 0) {
+        // Check both old and new field names for trader address
+        const traderAddress = trade.traderPublicKey || trade.user;
+        
+        if (!traderAddress || !config.signers.includes(traderAddress)) {
+          console.log(`👤 Trade filtered out: trader ${traderAddress || 'unknown'} not in signers list`);
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error checking trade conditions:', error);
+      return false;
+    }
+  }
+
   private handleTradeMessage(message: any): void {
     // Debug: print ALL messages
     console.log('📨 Raw message received:', JSON.stringify(message, null, 2));
@@ -167,17 +207,25 @@ class TradeStreamManager {
       if (mintAddress) {
         console.log(`🎯 Trade message for mint: ${mintAddress}`);
         
-        if (this.callbacks.has(mintAddress)) {
-          const callback = this.callbacks.get(mintAddress);
-          if (callback?.onTrade) {
-            try {
-              callback.onTrade(message as TradeMessage);
-            } catch (error) {
-              console.error('Error in trade callback:', error);
-              if (callback.onError) {
-                callback.onError(`Trade callback error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        if (this.streamConfigs.has(mintAddress)) {
+          const config = this.streamConfigs.get(mintAddress)!;
+          
+          // Apply signer filter before calling onTrade
+          if (this.shouldProcessTrade(message as TradeMessage, config)) {
+            console.log(`✅ Trade passed signer filter for contract ${config.contractId}`);
+            
+            if (config.callbacks.onTrade) {
+              try {
+                config.callbacks.onTrade(message as TradeMessage);
+              } catch (error) {
+                console.error('Error in trade callback:', error);
+                if (config.callbacks.onError) {
+                  config.callbacks.onError(`Trade callback error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                }
               }
             }
+          } else {
+            console.log(`❌ Trade filtered out by signer filter for contract ${config.contractId}`);
           }
         } else {
           console.log(`⚠️  No callback registered for mint: ${mintAddress}`);
@@ -190,6 +238,10 @@ class TradeStreamManager {
 
   public async startTradeStream(
     mintAddress: string,
+    signers: string[],
+    condition1: number,
+    condition2: Date,
+    contractId: number,
     callbacks: StreamCallbacks
   ): Promise<StreamResult> {
     try {
@@ -201,9 +253,28 @@ class TradeStreamManager {
         };
       }
 
-      // Store callbacks and subscription
-      this.callbacks.set(mintAddress, callbacks);
+
+
+      // Store stream configuration
+      const config: StreamConfig = {
+        mintAddress,
+        signers: signers || [],
+        condition1: condition1 || 0,
+        condition2,
+        contractId,
+        callbacks
+      };
+
+      this.streamConfigs.set(mintAddress, config);
       this.subscriptions.add(mintAddress);
+
+      console.log(`🔧 Stream configuration for contract ${contractId}:`, {
+        mintAddress,
+        signersCount: signers?.length || 0,
+        condition1: `${condition1} (available for service logic)`,
+        condition2: `${condition2.toISOString()} (available for service logic)`,
+        contractId
+      });
 
       // Connect and wait for connection to be established
       await this.connect();
@@ -217,7 +288,7 @@ class TradeStreamManager {
       console.error('Failed to start trade stream:', error);
       
       // Clean up on failure
-      this.callbacks.delete(mintAddress);
+      this.streamConfigs.delete(mintAddress);
       this.subscriptions.delete(mintAddress);
       
       return {
@@ -229,7 +300,7 @@ class TradeStreamManager {
 
   // Method to stop streaming for a specific mint (for future use)
   public stopTradeStream(mintAddress: string): void {
-    this.callbacks.delete(mintAddress);
+    this.streamConfigs.delete(mintAddress);
     this.subscriptions.delete(mintAddress);
     
     // If no more subscriptions, close the WebSocket
@@ -256,13 +327,22 @@ class TradeStreamManager {
     }
   }
 
+  // Method to get active stream configs
+  public getActiveStreams(): { mintAddress: string, contractId: number, signersCount: number }[] {
+    return Array.from(this.streamConfigs.entries()).map(([mintAddress, config]) => ({
+      mintAddress,
+      contractId: config.contractId,
+      signersCount: config.signers.length
+    }));
+  }
+
   // Method to gracefully close all connections
   public async closeAll(): Promise<void> {
     console.log('🔄 Closing all trade streams...');
     
     // Clear all subscriptions and callbacks
     this.subscriptions.clear();
-    this.callbacks.clear();
+    this.streamConfigs.clear();
     
     // Close WebSocket connection gracefully
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -282,28 +362,37 @@ class TradeStreamManager {
 // Create a singleton instance
 const tradeStreamManager = new TradeStreamManager();
 
-// Main function that matches your requested signature
+// Main function with updated signature to include new parameters
 export async function start_trades_stream(
   mintAddress: string,
-  signers: any, // Will be implemented later
-  condition1: any, // Will be implemented later
-  condition2: any, // Will be implemented later
+  signers: string[],
+  condition1: number,
+  condition2: Date,
+  contractId: number,
   onTrade: (trade: TradeMessage) => void,
   onError?: (error: string) => void,
   onConnect?: () => void,
   onDisconnect?: () => void
 ): Promise<StreamResult> {
-  return tradeStreamManager.startTradeStream(mintAddress, {
-    onTrade,
-    onError,
-    onConnect,
-    onDisconnect
-  });
+  return tradeStreamManager.startTradeStream(
+    mintAddress,
+    signers,
+    condition1,
+    condition2,
+    contractId,
+    {
+      onTrade,
+      onError,
+      onConnect,
+      onDisconnect
+    }
+  );
 }
 
 // Export additional utilities
-export { TradeMessage, StreamResult, StreamCallbacks };
+export { TradeMessage, StreamResult, StreamCallbacks, StreamConfig };
 export const getConnectionStatus = () => tradeStreamManager.getConnectionStatus();
+export const getActiveStreams = () => tradeStreamManager.getActiveStreams();
 export const stopTradeStream = (mintAddress: string) => tradeStreamManager.stopTradeStream(mintAddress);
 export const closeAllStreams = () => tradeStreamManager.closeAll();
 
@@ -332,71 +421,62 @@ process.on('unhandledRejection', async (reason, promise) => {
   await tradeStreamManager.closeAll();
   process.exit(1);
 });
-/*
-// Example usage:
-async function testTradeStream() {
-  const result = await start_trades_stream(
-    'Axb7pscMUp8XHDiJUfqagBPMqf9wr1VQCc4Bcw61pump', // Popular pump.fun token - change this to an active one
-    null, // signers (not used yet)
-    null, // condition1 (not used yet)
-    null, // condition2 (not used yet)
-    (trade) => {
-      // Handle timestamp safely
-      let timestampStr = 'Unknown';
-      try {
-        if (trade.timestamp) {
-          // Try different timestamp formats
-          let timestamp = trade.timestamp;
-          if (typeof timestamp === 'string') {
-            timestamp = parseInt(timestamp);
-          }
-          
-          // Check if it's in seconds or milliseconds
-          const date = timestamp > 1e12 ? new Date(timestamp) : new Date(timestamp * 1000);
-          timestampStr = date.toISOString();
-        }
-      } catch (e) {
-        timestampStr = `Invalid (${trade.timestamp})`;
-      }
 
-      console.log('🔥 New trade:', {
+/*
+// Example usage with new parameters:
+async function testEnhancedTradeStream() {
+  const signers = [
+    "7pDVmRPkc4qbkBXuDjLmsRhASi4c9CkV64i9wzkzcqep",
+    "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2"
+  ]; // List of wallet addresses to monitor
+  
+  const condition1 = 0.1; // Available for service logic (not used for filtering)
+  const condition2 = new Date('2024-01-01T00:00:00Z'); // Available for service logic (not used for filtering)
+  const contractId = 12345; // Contract/service identifier
+
+  const result = await start_trades_stream(
+    'FAtT2W7mJs27hHRCPiCfrBzASDpFNFQAYz2NXiEhpump', // Token mint address
+    signers,
+    condition1,
+    condition2,
+    contractId,
+    (trade) => {
+      console.log(`🔥 New signer-filtered trade for contract ${contractId}:`, {
         signature: trade.signature,
         mint: trade.mint,
-        solAmount: trade.sol_amount,
-        tokenAmount: trade.token_amount,
-        isBuy: trade.is_buy ? '🟢 BUY' : '🔴 SELL',
-        user: trade.user,
-        timestamp: timestampStr,
-        rawTimestamp: trade.timestamp // For debugging
+        solAmount: trade.solAmount,
+        tokenAmount: trade.tokenAmount,
+        txType: trade.txType === 'buy' ? '🟢 BUY' : '🔴 SELL',
+        traderPublicKey: trade.traderPublicKey,
+        newTokenBalance: trade.newTokenBalance,
+        bondingCurveKey: trade.bondingCurveKey,
+        vTokensInBondingCurve: trade.vTokensInBondingCurve,
+        vSolInBondingCurve: trade.vSolInBondingCurve,
+        marketCapSol: trade.marketCapSol,
+        pool: trade.pool,
+        contractId: contractId
       });
     },
     (error) => {
-      console.error('❌ Stream error:', error);
+      console.error(`❌ Stream error for contract ${contractId}:`, error);
     },
     () => {
-      console.log('✅ Connected to trade stream');
+      console.log(`✅ Connected to trade stream for contract ${contractId}`);
     },
     () => {
-      console.log('❌ Disconnected from trade stream');
+      console.log(`❌ Disconnected from trade stream for contract ${contractId}`);
     }
   );
 
   if (result.success) {
-    console.log('🚀 Trade stream started successfully');
+    console.log(`🚀 Enhanced trade stream started successfully for contract ${contractId}`);
     console.log('📊 Connection status:', getConnectionStatus());
+    console.log('🎯 Active streams:', getActiveStreams());
     console.log('⚠️  Press Ctrl+C to stop gracefully');
-    
-    // Example: Close programmatically after 30 seconds (remove this in production)
-    // setTimeout(async () => {
-    //   console.log('⏰ Auto-closing after 30 seconds...');
-    //   await closeAllStreams();
-    //   process.exit(0);
-    // }, 30000);
-    
   } else {
-    console.error('💥 Failed to start trade stream:', result.error);
+    console.error(`💥 Failed to start trade stream for contract ${contractId}:`, result.error);
   }
-}
+}*/
 
 // Run the test
-testTradeStream().catch(console.error);*/
+ //testEnhancedTradeStream().catch(console.error);
