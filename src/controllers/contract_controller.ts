@@ -55,12 +55,48 @@ export class ContractController {
     }
   }
 
+  // NEW: GET /contracts/:id/participants
+  static async getContractWithParticipants(req: Request, res: Response): Promise<void> {
+    try {
+      const id = parseInt(req.params.id)
+      
+      if (isNaN(id)) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid contract ID'
+        })
+        return
+      }
+
+      const contractWithParticipants = await ContractService.getContractWithParticipants(id)
+      
+      if (!contractWithParticipants) {
+        res.status(404).json({
+          success: false,
+          message: 'Contract not found'
+        })
+        return
+      }
+
+      res.status(200).json({
+        success: true,
+        data: contractWithParticipants
+      })
+    } catch (error) {
+      console.error('❌ Error in getContractWithParticipants:', error)
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error occurred'
+      })
+    }
+  }
+
   // POST /contracts - Updated to handle frontend field names
   static async createContract(req: Request, res: Response): Promise<void> {
     try {
       const { tokenMint, tokenAmount, condition1Value, condition2Value, userAddress } = req.body
 
-      console.log('📥 Received contract data:', { tokenMint, tokenAmount, condition1Value, condition2Value, userAddress })
+      console.log('🔥 Received contract data:', { tokenMint, tokenAmount, condition1Value, condition2Value, userAddress })
 
       // Validate required fields
       if (!tokenMint || tokenAmount === undefined || condition1Value === undefined || !condition2Value || !userAddress) {

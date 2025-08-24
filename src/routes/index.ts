@@ -75,6 +75,7 @@ try {
   router.get('/contracts/completed', ContractController.getCompletedContracts)
   router.get('/contracts/pending', ContractController.getPendingContracts)
   router.get('/contracts/:id', ContractController.getContractById)
+  router.get('/contracts/:id/participants', ContractController.getContractWithParticipants) // NEW: Get contract with all participants
   
   // REMOVED AUTH FROM CONTRACT CREATION
   router.post('/contracts', ContractController.createContract) // No auth required now

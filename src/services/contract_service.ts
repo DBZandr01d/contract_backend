@@ -20,6 +20,39 @@ interface CreateContractParams {
   supply: number
 }
 
+interface ContractParticipant {
+  user_address: string
+  supply: number
+  status: number
+  user: {
+    address: string
+    created_at: string
+    score: number
+    username?: string | null
+    bio?: string | null
+    profile_picture?: string | null
+  }
+}
+
+interface ContractWithParticipants {
+  id: number
+  mint: string
+  condition1: number
+  condition2: string
+  is_completed: boolean
+  created_at: string
+  completion_reason?: string | null
+  completed_at?: string | null
+  participants: ContractParticipant[]
+  statistics: {
+    total: number
+    inProgress: number
+    completedCondition1: number
+    completedCondition2: number
+    broken: number
+  }
+}
+
 export class ContractService {
   // Get all contracts
   static async getAllContracts(): Promise<Contract[]> {
@@ -51,6 +84,78 @@ export class ContractService {
     }
 
     return data
+  }
+
+  // NEW: Get contract with all participants and statistics
+  static async getContractWithParticipants(id: number): Promise<ContractWithParticipants | null> {
+    console.log(`📊 Getting contract ${id} with all participants...`)
+    
+    // First get the contract
+    const contract = await this.getContractById(id)
+    if (!contract) {
+      return null
+    }
+
+    // Get all user_contracts with user details for this contract
+    const { data: userContractsRaw, error: userContractsError } = await supabase
+      .from('user_contract')
+      .select(`
+        user_address,
+        supply,
+        status,
+        user:user_address (
+          address,
+          created_at,
+          score,
+          username,
+          bio,
+          profile_picture
+        )
+      `)
+      .eq('contract_id', id)
+
+    if (userContractsError) {
+      console.error('❌ Error fetching user contracts:', userContractsError)
+      throw new Error(`Failed to fetch contract participants: ${userContractsError.message}`)
+    }
+
+    // Transform the data to match our interface
+    const participants: ContractParticipant[] = (userContractsRaw || []).map((item: any) => {
+      // Handle the case where user might be an array (Supabase join behavior)
+      const userData = Array.isArray(item.user) ? item.user[0] : item.user
+      
+      return {
+        user_address: item.user_address,
+        supply: item.supply,
+        status: item.status,
+        user: {
+          address: userData?.address || item.user_address,
+          created_at: userData?.created_at || new Date().toISOString(),
+          score: userData?.score || 0,
+          username: userData?.username || null,
+          bio: userData?.bio || null,
+          profile_picture: userData?.profile_picture || null
+        }
+      }
+    })
+
+    // Calculate statistics
+    const statistics = {
+      total: participants.length,
+      inProgress: participants.filter(p => p.status === 0).length,
+      completedCondition1: participants.filter(p => p.status === 1).length,
+      completedCondition2: participants.filter(p => p.status === 2).length,
+      broken: participants.filter(p => p.status === 3).length
+    }
+
+    console.log(`✅ Found contract ${id} with ${participants.length} participants`)
+    console.log(`📊 Statistics:`, statistics)
+
+    return {
+      ...contract,
+      participants,
+      statistics
+    }
   }
 
   // Create new contract (simple version) - NOW WITH AUTO STREAM START
