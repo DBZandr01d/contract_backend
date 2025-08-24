@@ -1,4 +1,7 @@
 import WebSocket from 'ws';
+import { UserContractService } from '../services/user_contract_service';
+import { ContractService } from '../services/contract_service';
+import { UserContractStatus } from '../config/supabase';
 
 interface TradeMessage {
   signature: string;
@@ -39,10 +42,24 @@ interface StreamCallbacks {
 interface StreamConfig {
   mintAddress: string;
   signers: string[];
-  condition1: number;
-  condition2: Date;
+  condition1: number; // Market cap in USD
+  condition2: Date;   // Timestamp condition
   contractId: number;
   callbacks: StreamCallbacks;
+  allTimeHigh: number; // ATH in SOL for this stream
+}
+
+// Updated UserContract interface with status
+interface UserContract {
+  contract_id: number;
+  user_address: string;
+  supply: number;
+  status: UserContractStatus;
+}
+
+// Type for SOL price API response
+interface SolPriceResponse {
+  solPrice?: number;
 }
 
 class TradeStreamManager {
@@ -176,6 +193,111 @@ class TradeStreamManager {
     console.log(`Subscribed to token trades for: ${mintAddress}`);
   }
 
+  // Fetch SOL price from pump.fun API
+  private async getSolPrice(): Promise<number> {
+    try {
+      console.log('🔍 Fetching SOL price from pump.fun API...');
+      const response = await fetch('https://frontend-api-v3.pump.fun/sol-price');
+      const data: SolPriceResponse = await response.json();
+      const solPrice = data.solPrice;
+      console.log(`💰 Current SOL price: ${solPrice}`);
+      return solPrice;
+    } catch (error) {
+      console.error('❌ Failed to fetch SOL price:', error);
+      throw error;
+    }
+  }
+
+  // Check if condition2 (timestamp) has been reached
+  private checkCondition2(config: StreamConfig): boolean {
+    const currentTime = new Date();
+    const hasExpired = currentTime >= config.condition2;
+    
+    console.log(`⏰ Condition2 check for contract ${config.contractId}:`);
+    console.log(`   Current time: ${currentTime.toISOString()}`);
+    console.log(`   Condition2 time: ${config.condition2.toISOString()}`);
+    console.log(`   Has expired: ${hasExpired}`);
+    
+    return hasExpired;
+  }
+
+  // Update user contract status in database
+  private async updateUserContractStatus(contractId: number, userAddress: string, status: UserContractStatus): Promise<void> {
+    try {
+      console.log(`🔄 Updating user contract status: contract=${contractId}, user=${userAddress}, status=${status}`);
+      
+      // Note: You'll need to add this method to UserContractService
+      await UserContractService.updateUserContractStatus(contractId, userAddress, status);
+      
+      console.log(`✅ User contract status updated successfully`);
+    } catch (error) {
+      console.error('❌ Failed to update user contract status:', error);
+      throw error;
+    }
+  }
+
+  // Check if all users in contract have failed (status = 3)
+  private async checkAllUsersFailed(contractId: number): Promise<boolean> {
+    try {
+      console.log(`🔍 Checking if all users failed for contract ${contractId}...`);
+      
+      const userContracts = await UserContractService.getUserContractsByContractId(contractId);
+      const inProgressUsers = userContracts.filter(uc => uc.status === UserContractStatus.InProgress);
+      
+      console.log(`📊 Contract ${contractId} status:`);
+      console.log(`   Total users: ${userContracts.length}`);
+      console.log(`   In-progress users: ${inProgressUsers.length}`);
+      
+      const allFailed = inProgressUsers.length === 0;
+      console.log(`   All users failed: ${allFailed}`);
+      
+      return allFailed;
+    } catch (error) {
+      console.error('❌ Failed to check user statuses:', error);
+      throw error;
+    }
+  }
+
+  // Complete contract successfully (condition1 met)
+  private async completeContractSuccessfully(contractId: number): Promise<void> {
+    try {
+      console.log(`🎉 Completing contract ${contractId} successfully (condition1 met)...`);
+      
+      // Mark all in-progress users as successful (status = 1)
+      const userContracts = await UserContractService.getUserContractsByContractId(contractId);
+      const inProgressUsers = userContracts.filter(uc => uc.status === UserContractStatus.InProgress);
+      
+      console.log(`📝 Updating ${inProgressUsers.length} users to successful status...`);
+      
+      for (const userContract of inProgressUsers) {
+        await this.updateUserContractStatus(contractId, userContract.user_address, UserContractStatus.CompletedCondition1);
+      }
+      
+      // Mark contract as completed
+      await ContractService.markContractCompleted(contractId);
+      console.log(`✅ Contract ${contractId} marked as completed`);
+      
+    } catch (error) {
+      console.error('❌ Failed to complete contract successfully:', error);
+      throw error;
+    }
+  }
+
+  // Complete contract due to all users failing
+  private async completeContractAllFailed(contractId: number): Promise<void> {
+    try {
+      console.log(`💀 Completing contract ${contractId} - all users failed...`);
+      
+      // Mark contract as completed
+      await ContractService.markContractCompleted(contractId);
+      console.log(`✅ Contract ${contractId} marked as completed (all users failed)`);
+      
+    } catch (error) {
+      console.error('❌ Failed to complete contract (all failed):', error);
+      throw error;
+    }
+  }
+
   private shouldProcessTrade(trade: TradeMessage, config: StreamConfig): boolean {
     try {
       // Check signers condition - if signers list is provided and not empty, only process trades from those signers
@@ -196,7 +318,7 @@ class TradeStreamManager {
     }
   }
 
-  private handleTradeMessage(message: any): void {
+  private async handleTradeMessage(message: any): Promise<void> {
     // Debug: print ALL messages
     console.log('📨 Raw message received:', JSON.stringify(message, null, 2));
     
@@ -210,9 +332,20 @@ class TradeStreamManager {
         if (this.streamConfigs.has(mintAddress)) {
           const config = this.streamConfigs.get(mintAddress)!;
           
-          // Apply signer filter before calling onTrade
+          // Check condition2 (timestamp) first
+          if (this.checkCondition2(config)) {
+            console.log(`⏰ Contract ${config.contractId} has expired (condition2 reached)`);
+            console.log(`🔒 Closing stream for contract ${config.contractId}`);
+            this.stopTradeStream(mintAddress);
+            return;
+          }
+          
+          // Apply signer filter before processing
           if (this.shouldProcessTrade(message as TradeMessage, config)) {
             console.log(`✅ Trade passed signer filter for contract ${config.contractId}`);
+            
+            // Process the trade with contract logic
+            await this.processTradeWithContractLogic(message as TradeMessage, config);
             
             if (config.callbacks.onTrade) {
               try {
@@ -236,6 +369,88 @@ class TradeStreamManager {
     }
   }
 
+  // New method to handle contract logic for each trade
+  private async processTradeWithContractLogic(trade: TradeMessage, config: StreamConfig): Promise<void> {
+    try {
+      console.log(`🔄 Processing trade with contract logic for contract ${config.contractId}...`);
+      
+      // Update ATH if current market cap is higher
+      if (trade.marketCapSol > config.allTimeHigh) {
+        config.allTimeHigh = trade.marketCapSol;
+        console.log(`📈 New ATH for contract ${config.contractId}: ${config.allTimeHigh} SOL`);
+      }
+      
+      // Check condition1 (market cap in USD)
+      const solPrice = await this.getSolPrice();
+      const currentMarketCapUSD = trade.marketCapSol * solPrice;
+      const athMarketCapUSD = config.allTimeHigh * solPrice;
+      
+      console.log(`💹 Market cap analysis for contract ${config.contractId}:`);
+      console.log(`   Current market cap: ${trade.marketCapSol} SOL (~$${currentMarketCapUSD.toFixed(2)})`);
+      console.log(`   ATH market cap: ${config.allTimeHigh} SOL (~$${athMarketCapUSD.toFixed(2)})`);
+      console.log(`   Condition1 target: $${config.condition1}`);
+      
+      if (athMarketCapUSD >= config.condition1) {
+        console.log(`🎉 CONTRACT SUCCESSFUL! ATH reached condition1 for contract ${config.contractId}`);
+        await this.completeContractSuccessfully(config.contractId);
+        console.log(`🔒 Closing stream for successful contract ${config.contractId}`);
+        this.stopTradeStream(config.mintAddress);
+        return;
+      }
+      
+      // Check if trade is from a signer (user in the contract)
+      const traderAddress = trade.traderPublicKey || trade.user;
+      if (traderAddress && config.signers.includes(traderAddress)) {
+        console.log(`👤 Processing trade from signer: ${traderAddress}`);
+        
+        // Get user's supply requirement from database
+        const userContract = await UserContractService.getUserContract(config.contractId, traderAddress);
+        
+        if (!userContract) {
+          console.log(`⚠️  User contract not found for contract ${config.contractId} and user ${traderAddress}`);
+          return;
+        }
+        
+        console.log(`📊 User contract data:`, {
+          contractId: config.contractId,
+          userAddress: traderAddress,
+          requiredSupply: userContract.supply,
+          currentBalance: trade.newTokenBalance,
+          currentStatus: userContract.status
+        });
+        
+        // Only check users who are still in progress (status = 0)
+        if (userContract.status === UserContractStatus.InProgress) {
+          // Check if user's new balance is less than required supply
+          if (trade.newTokenBalance < userContract.supply) {
+            console.log(`💀 USER FAILED CONTRACT! Balance ${trade.newTokenBalance} < Required ${userContract.supply}`);
+            console.log(`   Contract: ${config.contractId}, User: ${traderAddress}`);
+            
+            // Set user status to failed (status = 3)
+            await this.updateUserContractStatus(config.contractId, traderAddress, UserContractStatus.Broken);
+            
+            // Check if all users have failed
+            const allUsersFailed = await this.checkAllUsersFailed(config.contractId);
+            if (allUsersFailed) {
+              console.log(`💀 All users failed for contract ${config.contractId}`);
+              await this.completeContractAllFailed(config.contractId);
+              console.log(`🔒 Closing stream for failed contract ${config.contractId}`);
+              this.stopTradeStream(config.mintAddress);
+              return;
+            }
+          } else {
+            console.log(`✅ User balance check passed: ${trade.newTokenBalance} >= ${userContract.supply}`);
+          }
+        } else {
+          console.log(`ℹ️  User already has final status: ${userContract.status}`);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Error processing trade with contract logic:', error);
+    }
+  }
+
   public async startTradeStream(
     mintAddress: string,
     signers: string[],
@@ -253,16 +468,15 @@ class TradeStreamManager {
         };
       }
 
-
-
-      // Store stream configuration
+      // Store stream configuration with initial ATH of 0
       const config: StreamConfig = {
         mintAddress,
         signers: signers || [],
         condition1: condition1 || 0,
         condition2,
         contractId,
-        callbacks
+        callbacks,
+        allTimeHigh: 0 // Initialize ATH to 0
       };
 
       this.streamConfigs.set(mintAddress, config);
@@ -271,9 +485,10 @@ class TradeStreamManager {
       console.log(`🔧 Stream configuration for contract ${contractId}:`, {
         mintAddress,
         signersCount: signers?.length || 0,
-        condition1: `${condition1} (available for service logic)`,
-        condition2: `${condition2.toISOString()} (available for service logic)`,
-        contractId
+        condition1: `$${condition1} USD (market cap target)`,
+        condition2: `${condition2.toISOString()} (expiration time)`,
+        contractId,
+        initialATH: 0
       });
 
       // Connect and wait for connection to be established
@@ -300,11 +515,13 @@ class TradeStreamManager {
 
   // Method to stop streaming for a specific mint (for future use)
   public stopTradeStream(mintAddress: string): void {
+    console.log(`🛑 Stopping trade stream for mint: ${mintAddress}`);
     this.streamConfigs.delete(mintAddress);
     this.subscriptions.delete(mintAddress);
     
     // If no more subscriptions, close the WebSocket
     if (this.subscriptions.size === 0 && this.ws) {
+      console.log(`🔌 Closing WebSocket connection (no more subscriptions)`);
       this.ws.close();
     }
   }
@@ -328,11 +545,12 @@ class TradeStreamManager {
   }
 
   // Method to get active stream configs
-  public getActiveStreams(): { mintAddress: string, contractId: number, signersCount: number }[] {
+  public getActiveStreams(): { mintAddress: string, contractId: number, signersCount: number, currentATH: number }[] {
     return Array.from(this.streamConfigs.entries()).map(([mintAddress, config]) => ({
       mintAddress,
       contractId: config.contractId,
-      signersCount: config.signers.length
+      signersCount: config.signers.length,
+      currentATH: config.allTimeHigh
     }));
   }
 
@@ -421,62 +639,3 @@ process.on('unhandledRejection', async (reason, promise) => {
   await tradeStreamManager.closeAll();
   process.exit(1);
 });
-
-/*
-// Example usage with new parameters:
-async function testEnhancedTradeStream() {
-  const signers = [
-    "7pDVmRPkc4qbkBXuDjLmsRhASi4c9CkV64i9wzkzcqep",
-    "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2"
-  ]; // List of wallet addresses to monitor
-  
-  const condition1 = 0.1; // Available for service logic (not used for filtering)
-  const condition2 = new Date('2024-01-01T00:00:00Z'); // Available for service logic (not used for filtering)
-  const contractId = 12345; // Contract/service identifier
-
-  const result = await start_trades_stream(
-    'FAtT2W7mJs27hHRCPiCfrBzASDpFNFQAYz2NXiEhpump', // Token mint address
-    signers,
-    condition1,
-    condition2,
-    contractId,
-    (trade) => {
-      console.log(`🔥 New signer-filtered trade for contract ${contractId}:`, {
-        signature: trade.signature,
-        mint: trade.mint,
-        solAmount: trade.solAmount,
-        tokenAmount: trade.tokenAmount,
-        txType: trade.txType === 'buy' ? '🟢 BUY' : '🔴 SELL',
-        traderPublicKey: trade.traderPublicKey,
-        newTokenBalance: trade.newTokenBalance,
-        bondingCurveKey: trade.bondingCurveKey,
-        vTokensInBondingCurve: trade.vTokensInBondingCurve,
-        vSolInBondingCurve: trade.vSolInBondingCurve,
-        marketCapSol: trade.marketCapSol,
-        pool: trade.pool,
-        contractId: contractId
-      });
-    },
-    (error) => {
-      console.error(`❌ Stream error for contract ${contractId}:`, error);
-    },
-    () => {
-      console.log(`✅ Connected to trade stream for contract ${contractId}`);
-    },
-    () => {
-      console.log(`❌ Disconnected from trade stream for contract ${contractId}`);
-    }
-  );
-
-  if (result.success) {
-    console.log(`🚀 Enhanced trade stream started successfully for contract ${contractId}`);
-    console.log('📊 Connection status:', getConnectionStatus());
-    console.log('🎯 Active streams:', getActiveStreams());
-    console.log('⚠️  Press Ctrl+C to stop gracefully');
-  } else {
-    console.error(`💥 Failed to start trade stream for contract ${contractId}:`, result.error);
-  }
-}*/
-
-// Run the test
- //testEnhancedTradeStream().catch(console.error);

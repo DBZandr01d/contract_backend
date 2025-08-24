@@ -1,5 +1,6 @@
 // src/services/contract_service.ts
 import { supabase } from '../config/supabase'
+import { StreamManagerService } from './stream_manager_service'
 
 // Updated Contract interface to match correct schema
 interface Contract {
@@ -52,7 +53,7 @@ export class ContractService {
     return data
   }
 
-  // Create new contract (simple version)
+  // Create new contract (simple version) - NOW WITH AUTO STREAM START
   static async createContract(contractData: Omit<Contract, 'id' | 'created_at'>): Promise<Contract> {
     console.log('💾 Creating contract in database:', contractData)
     
@@ -68,10 +69,25 @@ export class ContractService {
     }
 
     console.log('✅ Contract created successfully:', data)
+    
+    // 🚀 AUTO START STREAM FOR THE NEW CONTRACT
+    console.log(`🎬 Auto-starting stream for newly created contract ${data.id}...`)
+    
+    // Start stream in background (don't wait for it to complete)
+    StreamManagerService.startStreamForContract(data.id).then(success => {
+      if (success) {
+        console.log(`✅ Auto stream startup successful for contract ${data.id}`)
+      } else {
+        console.log(`⚠️ Auto stream startup failed for contract ${data.id} (will retry automatically)`)
+      }
+    }).catch(error => {
+      console.error(`❌ Auto stream startup error for contract ${data.id}:`, error)
+    })
+
     return data
   }
 
-  // Create contract with user_contract relationship
+  // Create contract with user_contract relationship - ALSO WITH AUTO STREAM START
   static async createContractWithUserContract(params: CreateContractParams) {
     console.log('💾 Creating contract with user_contract:', params)
     
@@ -100,7 +116,8 @@ export class ContractService {
     const userContractData = {
       contract_id: contract.id,
       user_address: params.userAddress,
-      supply: params.supply
+      supply: params.supply,
+      status: 0 // InProgress by default
     }
 
     const { data: userContract, error: userContractError } = await supabase
@@ -119,6 +136,20 @@ export class ContractService {
     }
 
     console.log('✅ User contract created:', userContract)
+
+    // 🚀 AUTO START STREAM FOR THE NEW CONTRACT (after user_contract is created)
+    console.log(`🎬 Auto-starting stream for newly created contract ${contract.id}...`)
+    
+    // Start stream in background (don't wait for it to complete)
+    StreamManagerService.startStreamForContract(contract.id).then(success => {
+      if (success) {
+        console.log(`✅ Auto stream startup successful for contract ${contract.id}`)
+      } else {
+        console.log(`⚠️ Auto stream startup failed for contract ${contract.id} (will retry automatically)`)
+      }
+    }).catch(error => {
+      console.error(`❌ Auto stream startup error for contract ${contract.id}:`, error)
+    })
 
     return {
       contract,
@@ -142,8 +173,16 @@ export class ContractService {
     return data
   }
 
-  // Delete contract
+  // Delete contract - ALSO STOP STREAM
   static async deleteContract(id: number): Promise<void> {
+    console.log(`🗑️ Deleting contract ${id}...`)
+    
+    // Stop stream if active
+    if (StreamManagerService.isStreamActive(id)) {
+      console.log(`🛑 Stopping active stream for contract ${id} before deletion...`)
+      await StreamManagerService.stopStreamForContract(id)
+    }
+
     const { error } = await supabase
       .from('contract')
       .delete()
@@ -152,11 +191,23 @@ export class ContractService {
     if (error) {
       throw new Error(`Failed to delete contract: ${error.message}`)
     }
+
+    console.log(`✅ Contract ${id} deleted successfully`)
   }
 
-  // Mark contract as completed
+  // Mark contract as completed - ALSO STOP STREAM
   static async markContractCompleted(id: number): Promise<Contract> {
-    return this.updateContract(id, { is_completed: true })
+    console.log(`✅ Marking contract ${id} as completed...`)
+    
+    // Stop stream if active
+    if (StreamManagerService.isStreamActive(id)) {
+      console.log(`🛑 Stopping active stream for completed contract ${id}...`)
+      await StreamManagerService.stopStreamForContract(id)
+    }
+
+    const result = await this.updateContract(id, { is_completed: true })
+    console.log(`✅ Contract ${id} marked as completed`)
+    return result
   }
 
   // Get completed contracts

@@ -14,6 +14,14 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
+// Add UserContractStatus enum
+export enum UserContractStatus {
+  InProgress = 0,
+  CompletedCondition1 = 1,
+  CompletedCondition2 = 2,
+  Broken = 3,
+}
+
 // Database types based on your schema
 export interface User {
   address: string
@@ -43,10 +51,12 @@ export interface Payment {
   is_paid: boolean
 }
 
+// Updated UserContract interface with status field
 export interface UserContract {
   contract_id: number
   user_address: string
   supply: number
+  status: UserContractStatus  // Added status field
 }
 
 // Extended types for API responses
@@ -61,6 +71,7 @@ export interface ContractWithDetails extends Contract {
   user_supply?: number
   token_symbol?: string
   token_name?: string
+  user_status?: UserContractStatus  // Added user status for detailed views
 }
 
 // Profile update types
@@ -76,4 +87,45 @@ export interface ApiResponse<T> {
   data?: T
   message?: string
   count?: number
+}
+
+// Contract statistics type
+export interface ContractStatistics {
+  total: number
+  inProgress: number
+  completedCondition1: number
+  completedCondition2: number
+  broken: number
+}
+
+// Helper function to get status display name
+export function getStatusDisplayName(status: UserContractStatus): string {
+  switch (status) {
+    case UserContractStatus.InProgress:
+      return 'In Progress'
+    case UserContractStatus.CompletedCondition1:
+      return 'Completed (Market Cap)'
+    case UserContractStatus.CompletedCondition2:
+      return 'Completed (Time)'
+    case UserContractStatus.Broken:
+      return 'Failed'
+    default:
+      return 'Unknown'
+  }
+}
+
+// Helper function to get status emoji
+export function getStatusEmoji(status: UserContractStatus): string {
+  switch (status) {
+    case UserContractStatus.InProgress:
+      return '⏳'
+    case UserContractStatus.CompletedCondition1:
+      return '🎉'
+    case UserContractStatus.CompletedCondition2:
+      return '⏰'
+    case UserContractStatus.Broken:
+      return '💀'
+    default:
+      return '❓'
+  }
 }
