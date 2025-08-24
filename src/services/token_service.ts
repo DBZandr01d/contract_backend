@@ -1,5 +1,6 @@
 // src/services/token_service.ts
 const { checkTokenBalance } = require('../utils/tokens-util')
+import { fetchMintMetadata } from '../utils/metadata_util'
 
 interface CheckBalanceParams {
   mintAddress: string
@@ -13,6 +14,17 @@ interface TokenBalanceResponse {
   error?: string
   actualBalance?: string
   requiredBalance?: string
+}
+
+interface TokenMetadataResponse {
+  success: boolean
+  data?: {
+    mint: string
+    name: string | null
+    image: string | null
+  }
+  warning?: string
+  error?: string
 }
 
 export class TokenService {
@@ -67,6 +79,87 @@ export class TokenService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error occurred while checking balance'
+      }
+    }
+  }
+
+  /**
+   * Get token metadata (name and image) for a mint address
+   */
+  static async getTokenMetadata(mintAddress: string): Promise<TokenMetadataResponse> {
+    try {
+      console.log('🔍 TokenService fetching metadata for:', mintAddress)
+      
+      const result = await fetchMintMetadata(mintAddress)
+
+      if (!result.success) {
+        console.warn('⚠️ Failed to fetch metadata:', result.error)
+        
+        // Still return success but with null values and a warning
+        // This prevents the frontend from breaking if metadata fails
+        return {
+          success: true,
+          data: {
+            mint: mintAddress,
+            name: null,
+            image: null
+          },
+          warning: result.error || 'Could not fetch token metadata'
+        }
+      }
+
+      if (!result.data) {
+        return {
+          success: true,
+          data: {
+            mint: mintAddress,
+            name: null,
+            image: null
+          },
+          warning: 'No metadata found for this token'
+        }
+      }
+
+      // Extract name and image from the metadata
+      let tokenName: string | null = null
+      let tokenImage: string | null = null
+
+      // First try off-chain metadata (usually more complete)
+      if (result.data.offChainMetadata) {
+        tokenName = result.data.offChainMetadata.name || result.data.name
+        tokenImage = result.data.offChainMetadata.image || null
+      } else {
+        // Fall back to on-chain metadata
+        tokenName = result.data.name || null
+      }
+
+      console.log('✅ TokenService metadata result:', { 
+        mint: mintAddress, 
+        name: tokenName, 
+        hasImage: !!tokenImage 
+      })
+
+      return {
+        success: true,
+        data: {
+          mint: mintAddress,
+          name: tokenName,
+          image: tokenImage
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ TokenService metadata error:', error)
+      
+      // Even on error, return success with null values to not break frontend
+      return {
+        success: true,
+        data: {
+          mint: mintAddress,
+          name: null,
+          image: null
+        },
+        warning: error instanceof Error ? error.message : 'Unknown error occurred while fetching metadata'
       }
     }
   }

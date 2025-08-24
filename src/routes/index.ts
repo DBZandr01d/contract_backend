@@ -64,6 +64,7 @@ try {
   
   // Public token routes
   router.post('/tokens/check-balance', TokenController.checkTokenBalance)
+  router.get('/tokens/metadata/:mintAddress', TokenController.getTokenMetadata) // NEW: Get token metadata
 
   // =====================================================
   // CONTRACT ROUTES
@@ -158,6 +159,15 @@ try {
     res.json({
       success: false,
       message: 'TokenController not found - fallback route',
+      error: 'Missing token_controller.ts file'
+    })
+  })
+
+  // Fallback metadata route for testing
+  router.get('/tokens/metadata/:mintAddress', (req, res) => {
+    res.json({
+      success: false,
+      message: 'TokenController not found - fallback metadata route',
       error: 'Missing token_controller.ts file'
     })
   })

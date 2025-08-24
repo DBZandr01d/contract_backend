@@ -66,6 +66,37 @@ class TokenController {
       })
     }
   }
+
+  // GET /tokens/metadata/:mintAddress
+  static async getTokenMetadata(req: Request, res: Response): Promise<void> {
+    try {
+      const { mintAddress } = req.params
+
+      console.log('🔍 Fetching token metadata for:', mintAddress)
+
+      // Validate mint address parameter
+      if (!mintAddress) {
+        res.status(400).json({
+          success: false,
+          message: 'mintAddress parameter is required'
+        })
+        return
+      }
+
+      const result = await TokenService.getTokenMetadata(mintAddress.trim())
+
+      console.log('✅ Token metadata result:', result)
+      
+      res.status(200).json(result)
+      
+    } catch (error) {
+      console.error('❌ Token metadata fetch error:', error)
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error occurred'
+      })
+    }
+  }
 }
 
 module.exports = { TokenController }
