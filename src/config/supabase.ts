@@ -1,4 +1,7 @@
 // src/config/supabase.ts
+// Update: add `signed_at` to UserContract interface
+// References: :contentReference[oaicite:0]{index=0}
+
 import { createClient } from '@supabase/supabase-js'
 
 console.log('Environment check:')
@@ -51,12 +54,13 @@ export interface Payment {
   is_paid: boolean
 }
 
-// Updated UserContract interface with status field
+// Updated UserContract interface with status field + signed_at (read-only, DB default)
 export interface UserContract {
   contract_id: number
   user_address: string
   supply: number
-  status: UserContractStatus  // Added status field
+  status: UserContractStatus
+  signed_at: string // ISO timestamp set by DB default CURRENT_TIMESTAMP
 }
 
 // Extended types for API responses
@@ -71,7 +75,7 @@ export interface ContractWithDetails extends Contract {
   user_supply?: number
   token_symbol?: string
   token_name?: string
-  user_status?: UserContractStatus  // Added user status for detailed views
+  user_status?: UserContractStatus
 }
 
 // Profile update types

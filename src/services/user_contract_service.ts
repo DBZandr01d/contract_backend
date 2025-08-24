@@ -1,12 +1,16 @@
-// UserContract Service - src/services/user_contract_service.ts
+// src/services/user_contract_service.ts
+// Update: add `signed_at` to local UserContract interface
+// References: :contentReference[oaicite:1]{index=1} :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3}
+
 import { supabase, UserContractStatus } from '../config/supabase'
 
-// Updated UserContract interface with status field
+// Updated UserContract interface with status field + signed_at (read-only)
 export interface UserContract {
   contract_id: number;
   user_address: string;
   supply: number;
   status: UserContractStatus;
+  signed_at: string; // ISO timestamp set by DB default CURRENT_TIMESTAMP
 }
 
 export class UserContractService {
@@ -61,7 +65,7 @@ export class UserContractService {
       .single()
 
     if (error) {
-      if (error.code === 'PGRST116') {
+      if ((error as any).code === 'PGRST116') {
         return null // Not found
       }
       throw new Error(`Failed to fetch user contract: ${error.message}`)
@@ -70,8 +74,8 @@ export class UserContractService {
     return data
   }
 
-  // Create user contract
-  static async createUserContract(userContractData: UserContract): Promise<UserContract> {
+  // Create user contract (do NOT send signed_at; DB fills it)
+  static async createUserContract(userContractData: Omit<UserContract, 'signed_at'>): Promise<UserContract> {
     const { data, error } = await supabase
       .from('user_contract')
       .insert([userContractData])
@@ -82,7 +86,7 @@ export class UserContractService {
       throw new Error(`Failed to create user contract: ${error.message}`)
     }
 
-    return data
+    return data as UserContract
   }
 
   // Update user contract supply
@@ -99,10 +103,10 @@ export class UserContractService {
       throw new Error(`Failed to update user contract: ${error.message}`)
     }
 
-    return data
+    return data as UserContract
   }
 
-  // NEW: Update user contract status
+  // Update user contract status
   static async updateUserContractStatus(contractId: number, userAddress: string, status: UserContractStatus): Promise<UserContract> {
     console.log(`🔄 UserContractService: Updating status for contract ${contractId}, user ${userAddress} to status ${status}`);
     
@@ -120,10 +124,10 @@ export class UserContractService {
     }
 
     console.log(`✅ UserContractService: Status updated successfully:`, data);
-    return data
+    return data as UserContract
   }
 
-  // NEW: Get user contracts by status
+  // Get user contracts by status
   static async getUserContractsByStatus(contractId: number, status: UserContractStatus): Promise<UserContract[]> {
     console.log(`🔍 UserContractService: Getting users with status ${status} for contract ${contractId}`);
     
@@ -142,7 +146,7 @@ export class UserContractService {
     return data || []
   }
 
-  // NEW: Bulk update user contract statuses
+  // Bulk update user contract statuses
   static async bulkUpdateUserContractStatuses(contractId: number, fromStatus: UserContractStatus, toStatus: UserContractStatus): Promise<UserContract[]> {
     console.log(`🔄 UserContractService: Bulk updating statuses for contract ${contractId} from ${fromStatus} to ${toStatus}`);
     
@@ -193,7 +197,7 @@ export class UserContractService {
     return data || []
   }
 
-  // NEW: Get contract statistics
+  // Get contract statistics
   static async getContractStatistics(contractId: number) {
     console.log(`📊 UserContractService: Getting statistics for contract ${contractId}`);
     
