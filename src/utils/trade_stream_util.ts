@@ -47,6 +47,7 @@ interface StreamConfig {
   contractId: number;
   callbacks: StreamCallbacks;
   allTimeHigh: number; // ATH in SOL for this stream
+  signerRefreshInterval: NodeJS.Timeout | null; // New field for interval management
 }
 
 // Updated UserContract interface with status
@@ -71,6 +72,7 @@ class TradeStreamManager {
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 1000; // Start with 1 second
   private wsUrl: string = 'wss://pumpportal.fun/api/data';
+  private signerRefreshIntervalMs: number = 2000; // 2 seconds
 
   private async connect(): Promise<void> {
     if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
@@ -193,6 +195,74 @@ class TradeStreamManager {
     console.log(`Subscribed to token trades for: ${mintAddress}`);
   }
 
+  // NEW METHOD: Refresh signers from database
+  private async refreshSigners(config: StreamConfig): Promise<void> {
+    try {
+      console.log(`🔄 Refreshing signers for contract ${config.contractId}...`);
+      
+      // Get all active users (status = 0) for this contract
+      const activeUserContracts = await UserContractService.getUserContractsByStatus(
+        config.contractId, 
+        UserContractStatus.InProgress
+      );
+      
+      // Extract user addresses
+      const currentSignersFromDB = activeUserContracts.map(uc => uc.user_address);
+      
+      // Compare with existing signers
+      const existingSigners = new Set(config.signers);
+      const newSignersFromDB = new Set(currentSignersFromDB);
+      
+      // Find new signers that weren't in the original list
+      const newSigners = currentSignersFromDB.filter(addr => !existingSigners.has(addr));
+      
+      // Find removed signers (users who were marked as failed/completed)
+      const removedSigners = config.signers.filter(addr => !newSignersFromDB.has(addr));
+      
+      if (newSigners.length > 0) {
+        console.log(`✨ Found ${newSigners.length} new signers for contract ${config.contractId}:`, newSigners);
+      }
+      
+      if (removedSigners.length > 0) {
+        console.log(`🗑️ Removed ${removedSigners.length} signers from contract ${config.contractId}:`, removedSigners);
+      }
+      
+      // Update signers list with current active users
+      if (newSigners.length > 0 || removedSigners.length > 0) {
+        const oldCount = config.signers.length;
+        config.signers = currentSignersFromDB;
+        console.log(`📊 Updated signers for contract ${config.contractId}: ${oldCount} → ${config.signers.length} signers`);
+      }
+      
+    } catch (error) {
+      console.error(`❌ Failed to refresh signers for contract ${config.contractId}:`, error);
+    }
+  }
+
+  // NEW METHOD: Start periodic signer refresh for a specific config
+  private startSignerRefresh(config: StreamConfig): void {
+    console.log(`⏰ Starting periodic signer refresh for contract ${config.contractId} (every ${this.signerRefreshIntervalMs}ms)`);
+    
+    // Clear any existing interval first
+    if (config.signerRefreshInterval) {
+      clearInterval(config.signerRefreshInterval);
+    }
+    
+    // Start the periodic refresh
+    config.signerRefreshInterval = setInterval(async () => {
+      await this.refreshSigners(config);
+    }, this.signerRefreshIntervalMs);
+  }
+
+  // NEW METHOD: Stop periodic signer refresh for a specific config
+  private stopSignerRefresh(config: StreamConfig): void {
+    if (config.signerRefreshInterval) {
+      console.log(`⏹️ Stopping periodic signer refresh for contract ${config.contractId}`);
+      clearInterval(config.signerRefreshInterval);
+      config.signerRefreshInterval = null;
+    }
+  }
+
   // Fetch SOL price from pump.fun API
   private async getSolPrice(): Promise<number> {
     try {
@@ -267,7 +337,7 @@ class TradeStreamManager {
       const userContracts = await UserContractService.getUserContractsByContractId(contractId);
       const inProgressUsers = userContracts.filter(uc => uc.status === UserContractStatus.InProgress);
       
-      console.log(`📝 Updating ${inProgressUsers.length} users to successful status...`);
+      console.log(`🔍 Updating ${inProgressUsers.length} users to successful status...`);
       
       for (const userContract of inProgressUsers) {
         await this.updateUserContractStatus(contractId, userContract.user_address, UserContractStatus.CompletedCondition1);
@@ -361,10 +431,10 @@ class TradeStreamManager {
             console.log(`❌ Trade filtered out by signer filter for contract ${config.contractId}`);
           }
         } else {
-          console.log(`⚠️  No callback registered for mint: ${mintAddress}`);
+          console.log(`⚠️ No callback registered for mint: ${mintAddress}`);
         }
       } else {
-        console.log('ℹ️  Message without mint (probably system message)');
+        console.log('ℹ️ Message without mint (probably system message)');
       }
     }
   }
@@ -407,7 +477,7 @@ class TradeStreamManager {
         const userContract = await UserContractService.getUserContract(config.contractId, traderAddress);
         
         if (!userContract) {
-          console.log(`⚠️  User contract not found for contract ${config.contractId} and user ${traderAddress}`);
+          console.log(`⚠️ User contract not found for contract ${config.contractId} and user ${traderAddress}`);
           return;
         }
         
@@ -442,7 +512,7 @@ class TradeStreamManager {
             console.log(`✅ User balance check passed: ${trade.newTokenBalance} >= ${userContract.supply}`);
           }
         } else {
-          console.log(`ℹ️  User already has final status: ${userContract.status}`);
+          console.log(`ℹ️ User already has final status: ${userContract.status}`);
         }
       }
       
@@ -476,7 +546,8 @@ class TradeStreamManager {
         condition2,
         contractId,
         callbacks,
-        allTimeHigh: 0 // Initialize ATH to 0
+        allTimeHigh: 0, // Initialize ATH to 0
+        signerRefreshInterval: null // Initialize refresh interval as null
       };
 
       this.streamConfigs.set(mintAddress, config);
@@ -488,11 +559,15 @@ class TradeStreamManager {
         condition1: `$${condition1} USD (market cap target)`,
         condition2: `${condition2.toISOString()} (expiration time)`,
         contractId,
-        initialATH: 0
+        initialATH: 0,
+        refreshInterval: `${this.signerRefreshIntervalMs}ms`
       });
 
       // Connect and wait for connection to be established
       await this.connect();
+
+      // Start periodic signer refresh for this stream
+      this.startSignerRefresh(config);
 
       return {
         success: true,
@@ -513,9 +588,16 @@ class TradeStreamManager {
     }
   }
 
-  // Method to stop streaming for a specific mint (for future use)
+  // Method to stop streaming for a specific mint (UPDATED to stop refresh)
   public stopTradeStream(mintAddress: string): void {
     console.log(`🛑 Stopping trade stream for mint: ${mintAddress}`);
+    
+    // Get config before deleting to stop refresh
+    const config = this.streamConfigs.get(mintAddress);
+    if (config) {
+      this.stopSignerRefresh(config);
+    }
+    
     this.streamConfigs.delete(mintAddress);
     this.subscriptions.delete(mintAddress);
     
@@ -544,19 +626,31 @@ class TradeStreamManager {
     }
   }
 
-  // Method to get active stream configs
-  public getActiveStreams(): { mintAddress: string, contractId: number, signersCount: number, currentATH: number }[] {
+  // Method to get active stream configs (UPDATED to show refresh status)
+  public getActiveStreams(): { 
+    mintAddress: string, 
+    contractId: number, 
+    signersCount: number, 
+    currentATH: number,
+    hasRefreshInterval: boolean 
+  }[] {
     return Array.from(this.streamConfigs.entries()).map(([mintAddress, config]) => ({
       mintAddress,
       contractId: config.contractId,
       signersCount: config.signers.length,
-      currentATH: config.allTimeHigh
+      currentATH: config.allTimeHigh,
+      hasRefreshInterval: config.signerRefreshInterval !== null
     }));
   }
 
-  // Method to gracefully close all connections
+  // Method to gracefully close all connections (UPDATED to stop all refreshes)
   public async closeAll(): Promise<void> {
     console.log('🔄 Closing all trade streams...');
+    
+    // Stop all signer refresh intervals
+    this.streamConfigs.forEach(config => {
+      this.stopSignerRefresh(config);
+    });
     
     // Clear all subscriptions and callbacks
     this.subscriptions.clear();
@@ -616,13 +710,13 @@ export const closeAllStreams = () => tradeStreamManager.closeAll();
 
 // Graceful shutdown handlers
 process.on('SIGINT', async () => {
-  console.log('\n⚠️  Received SIGINT (Ctrl+C). Shutting down gracefully...');
+  console.log('\n⚠️ Received SIGINT (Ctrl+C). Shutting down gracefully...');
   await tradeStreamManager.closeAll();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('\n⚠️  Received SIGTERM. Shutting down gracefully...');
+  console.log('\n⚠️ Received SIGTERM. Shutting down gracefully...');
   await tradeStreamManager.closeAll();
   process.exit(0);
 });
