@@ -59,7 +59,7 @@ export class UserController {
   // POST /users
   static async createUser(req: Request, res: Response): Promise<void> {
     try {
-      const { address, score = 0, username, bio, profile_picture } = req.body
+      const { address, username, bio, profile_picture } = req.body
 
       if (!address) {
         res.status(400).json({
@@ -79,7 +79,7 @@ export class UserController {
         return
       }
 
-      const userData: any = { address, score }
+      const userData: any = { address }
       if (username) userData.username = username
       if (bio) userData.bio = bio
       if (profile_picture) userData.profile_picture = profile_picture
@@ -192,7 +192,7 @@ export class UserController {
     }
   }
 
-  // NEW: PATCH /users/:address/profile - Update user profile
+  // PATCH /users/:address/profile - Update user profile
   static async updateUserProfile(req: Request, res: Response): Promise<void> {
     try {
       const { address } = req.params
@@ -238,70 +238,72 @@ export class UserController {
     }
   }
 
-  // NEW: GET /users/:address/profile - Get full user profile with contracts
+  // GET /users/:address/profile - Get full user profile with contracts
   static async getUserProfile(req: Request, res: Response): Promise<void> {
-  try {
-    const { address } = req.params
-    
-    if (!address) {
-      res.status(400).json({
-        success: false,
-        message: 'Address parameter is required'
-      })
-      return
-    }
-
-    // Try to get existing user first
-    let userProfile = await UserService.getUserWithContracts(address)
-    
-    // If user doesn't exist, create them automatically
-    if (!userProfile) {
-      console.log(`🆕 Creating new user profile for: ${address}`)
+    try {
+      const { address } = req.params
       
-      try {
-        // Create new user with default values
-        const newUser = await UserService.createUser({
-          address,
-          score: 0
+      if (!address) {
+        res.status(400).json({
+          success: false,
+          message: 'Address parameter is required'
         })
+        return
+      }
+
+      // Try to get existing user first
+      let userProfile = await UserService.getUserWithContracts(address)
+      
+      // If user doesn't exist, create them automatically
+      if (!userProfile) {
+        console.log(`Creating new user profile for: ${address}`)
         
-        console.log(`✅ Created user: ${address}`)
-        
-        // Get the full profile with contracts (will be empty initially)
-        userProfile = await UserService.getUserWithContracts(address)
-      } catch (createError) {
-        console.error(`❌ Failed to create user ${address}:`, createError)
-        
-        // If creation fails, return a minimal profile
-        userProfile = {
-          address,
-          created_at: new Date().toISOString(),
-          score: 0,
-          username: null,
-          bio: null,
-          profile_picture: null,
-          activeContracts: [],
-          contractHistory: [],
-          totalContracts: 0,
-          successRate: 0
+        try {
+          // Create new user with default values (score will be set automatically by DB)
+          const newUser = await UserService.createUser({
+            address,
+            username: null,
+            bio: null,
+            profile_picture: null
+          })
+          
+          console.log(`Created user: ${address}`)
+          
+          // Get the full profile with contracts (will be empty initially)
+          userProfile = await UserService.getUserWithContracts(address)
+        } catch (createError) {
+          console.error(`Failed to create user ${address}:`, createError)
+          
+          // If creation fails, return a minimal profile
+          userProfile = {
+            address,
+            created_at: new Date().toISOString(),
+            score: 0,
+            username: null,
+            bio: null,
+            profile_picture: null,
+            activeContracts: [],
+            contractHistory: [],
+            totalContracts: 0,
+            successRate: 0
+          }
         }
       }
+
+      res.status(200).json({
+        success: true,
+        data: userProfile
+      })
+    } catch (error) {
+      console.error('Error in getUserProfile:', error)
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error occurred'
+      })
     }
-
-    res.status(200).json({
-      success: true,
-      data: userProfile
-    })
-  } catch (error) {
-    console.error('Error in getUserProfile:', error)
-    res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Unknown error occurred'
-    })
   }
-}
 
-  // NEW: GET /users/:address/contracts - Get user's contracts separated by status
+  // GET /users/:address/contracts - Get user's contracts separated by status
   static async getUserContracts(req: Request, res: Response): Promise<void> {
     try {
       const { address } = req.params
@@ -339,7 +341,7 @@ export class UserController {
     }
   }
 
-  // NEW: POST /users/:address/ensure - Get or create user (for wallet connection)
+  // POST /users/:address/ensure - Get or create user (for wallet connection)
   static async ensureUser(req: Request, res: Response): Promise<void> {
     try {
       const { address } = req.params
@@ -367,7 +369,7 @@ export class UserController {
     }
   }
 
-  // NEW: GET /users/search?q=username - Search users by username
+  // GET /users/search?q=username - Search users by username
   static async searchUsers(req: Request, res: Response): Promise<void> {
     try {
       const { q } = req.query
@@ -403,7 +405,7 @@ export class UserController {
     }
   }
 
-  // NEW: GET /users/leaderboard - Get top users by score
+  // GET /users/leaderboard - Get top users by score
   static async getLeaderboard(req: Request, res: Response): Promise<void> {
     try {
       const limit = parseInt(req.query.limit as string) || 20
@@ -431,7 +433,7 @@ export class UserController {
     }
   }
 
-  // NEW: GET /users/:address/stats - Get user statistics
+  // GET /users/:address/stats - Get user statistics
   static async getUserStats(req: Request, res: Response): Promise<void> {
     try {
       const { address } = req.params

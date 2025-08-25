@@ -20,7 +20,7 @@ try {
   const { PaymentController } = require('../controllers/payment_controller')
   const { UserContractController } = require('../controllers/user_contract_controller')
   const { AuthController } = require('../controllers/auth_controller')
-  const { TokenController } = require('../controllers/token_controller') // Added token controller
+  const { TokenController } = require('../controllers/token_controller')
   
   // Import middleware
   const { authMiddleware, optionalAuthMiddleware, requireWalletOwnership } = require('../middleware/auth_middleware')
@@ -64,7 +64,7 @@ try {
   
   // Public token routes
   router.post('/tokens/check-balance', TokenController.checkTokenBalance)
-  router.get('/tokens/metadata/:mintAddress', TokenController.getTokenMetadata) // NEW: Get token metadata
+  router.get('/tokens/metadata/:mintAddress', TokenController.getTokenMetadata)
 
   // =====================================================
   // CONTRACT ROUTES
@@ -75,10 +75,13 @@ try {
   router.get('/contracts/completed', ContractController.getCompletedContracts)
   router.get('/contracts/pending', ContractController.getPendingContracts)
   router.get('/contracts/:id', ContractController.getContractById)
-  router.get('/contracts/:id/participants', ContractController.getContractWithParticipants) // NEW: Get contract with all participants
+  router.get('/contracts/:id/participants', ContractController.getContractWithParticipants) // Get contract with all participants
   
-  // REMOVED AUTH FROM CONTRACT CREATION
-  router.post('/contracts', ContractController.createContract) // No auth required now
+  // Contract creation (no auth required)
+  router.post('/contracts', ContractController.createContract)
+  
+  // NEW: Sign contract endpoint (no auth required - uses wallet verification)
+  router.post('/contracts/:id/sign', ContractController.signContract)
   
   // Protected contract routes
   router.put('/contracts/:id', authMiddleware, ContractController.updateContract)
@@ -170,6 +173,15 @@ try {
       success: false,
       message: 'TokenController not found - fallback metadata route',
       error: 'Missing token_controller.ts file'
+    })
+  })
+
+  // Fallback sign contract route
+  router.post('/contracts/:id/sign', (req, res) => {
+    res.json({
+      success: false,
+      message: 'ContractController not found - fallback sign route',
+      error: 'Missing contract_controller.ts file'
     })
   })
 }

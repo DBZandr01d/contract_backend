@@ -55,8 +55,10 @@ export class UserContractService {
     return data || []
   }
 
-  // Get specific user contract
+  // Get specific user contract - ENHANCED WITH LOGGING
   static async getUserContract(contractId: number, userAddress: string): Promise<UserContract | null> {
+    console.log(`🔍 UserContractService: Looking up user contract for contractId=${contractId}, userAddress=${userAddress}`)
+    
     const { data, error } = await supabase
       .from('user_contract')
       .select('*')
@@ -66,16 +68,27 @@ export class UserContractService {
 
     if (error) {
       if ((error as any).code === 'PGRST116') {
+        console.log(`✅ UserContractService: No existing user contract found for contractId=${contractId}, userAddress=${userAddress}`)
         return null // Not found
       }
+      console.error(`❌ UserContractService: Error fetching user contract:`, error)
       throw new Error(`Failed to fetch user contract: ${error.message}`)
     }
 
+    console.log(`🔍 UserContractService: Found existing user contract:`, data)
     return data
   }
 
-  // Create user contract (do NOT send signed_at; DB fills it)
+  // Create user contract (do NOT send signed_at; DB fills it) - ENHANCED WITH LOGGING
   static async createUserContract(userContractData: Omit<UserContract, 'signed_at'>): Promise<UserContract> {
+    console.log(`📝 UserContractService: Creating user contract:`, userContractData)
+    
+    // Double-check that this combination doesn't already exist
+    const existing = await this.getUserContract(userContractData.contract_id, userContractData.user_address)
+    if (existing) {
+      throw new Error(`User contract already exists: ${JSON.stringify(existing)}`)
+    }
+    
     const { data, error } = await supabase
       .from('user_contract')
       .insert([userContractData])
@@ -83,9 +96,26 @@ export class UserContractService {
       .single()
 
     if (error) {
+      console.error(`❌ UserContractService: Failed to create user contract:`, error)
+      console.error(`❌ UserContractService: Attempted to insert:`, userContractData)
+      
+      // Check if it's a duplicate key error
+      if (error.code === '23505') { // PostgreSQL unique constraint violation
+        // Try to find what's causing the conflict
+        const conflicting = await supabase
+          .from('user_contract')
+          .select('*')
+          .eq('contract_id', userContractData.contract_id)
+          .eq('user_address', userContractData.user_address)
+        
+        console.error(`❌ UserContractService: Conflicting records found:`, conflicting.data)
+        throw new Error(`Duplicate user contract detected: ${JSON.stringify(conflicting.data)}`)
+      }
+      
       throw new Error(`Failed to create user contract: ${error.message}`)
     }
 
+    console.log(`✅ UserContractService: User contract created successfully:`, data)
     return data as UserContract
   }
 

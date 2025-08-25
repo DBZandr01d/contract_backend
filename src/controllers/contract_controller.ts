@@ -55,7 +55,7 @@ export class ContractController {
     }
   }
 
-  // NEW: GET /contracts/:id/participants
+  // GET /contracts/:id/participants
   static async getContractWithParticipants(req: Request, res: Response): Promise<void> {
     try {
       const id = parseInt(req.params.id)
@@ -84,6 +84,85 @@ export class ContractController {
       })
     } catch (error) {
       console.error('❌ Error in getContractWithParticipants:', error)
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error occurred'
+      })
+    }
+  }
+
+  // NEW: POST /contracts/:id/sign - Sign a contract
+  static async signContract(req: Request, res: Response): Promise<void> {
+    try {
+      const contractId = parseInt(req.params.id)
+      const { supply, userAddress } = req.body
+
+      console.log('🔏 User attempting to sign contract:', { contractId, supply, userAddress })
+
+      // Validate required fields
+      if (isNaN(contractId)) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid contract ID'
+        })
+        return
+      }
+
+      if (!supply || !userAddress) {
+        res.status(400).json({
+          success: false,
+          message: 'supply and userAddress are required'
+        })
+        return
+      }
+
+      // Validate supply is a positive number
+      if (typeof supply !== 'number' || supply <= 0) {
+        res.status(400).json({
+          success: false,
+          message: 'supply must be a positive number'
+        })
+        return
+      }
+
+      const result = await ContractService.signContract({
+        contractId,
+        userAddress: userAddress.trim(),
+        supply
+      })
+
+      console.log('✅ Contract signed successfully:', result)
+      
+      res.status(200).json({
+        success: true,
+        data: result,
+        message: 'Contract signed successfully'
+      })
+    } catch (error) {
+      console.error('❌ Contract signing error:', error)
+      
+      // Handle specific error messages from the service
+      if (error instanceof Error) {
+        if (error.message.includes('not found')) {
+          res.status(404).json({
+            success: false,
+            message: error.message
+          })
+          return
+        }
+        
+        if (error.message.includes('already signed') || 
+            error.message.includes('completed') || 
+            error.message.includes('expired') ||
+            error.message.includes('Insufficient token balance')) {
+          res.status(400).json({
+            success: false,
+            message: error.message
+          })
+          return
+        }
+      }
+      
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : 'Unknown error occurred'

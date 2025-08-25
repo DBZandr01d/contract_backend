@@ -1,6 +1,9 @@
 // src/services/contract_service.ts
 import { supabase } from '../config/supabase'
 import { StreamManagerService } from './stream_manager_service'
+import { TokenService } from './token_service'
+import { UserContractService } from './user_contract_service'
+import { UserService } from './user_service'
 
 // Updated Contract interface to match correct schema
 interface Contract {
@@ -16,6 +19,13 @@ interface CreateContractParams {
   mint: string
   condition1: number
   condition2: string
+  userAddress: string
+  supply: number
+}
+
+// NEW: Interface for signing a contract
+interface SignContractParams {
+  contractId: number
   userAddress: string
   supply: number
 }
@@ -86,7 +96,7 @@ export class ContractService {
     return data
   }
 
-  // NEW: Get contract with all participants and statistics
+  // Get contract with all participants and statistics
   static async getContractWithParticipants(id: number): Promise<ContractWithParticipants | null> {
     console.log(`📊 Getting contract ${id} with all participants...`)
     
@@ -158,7 +168,92 @@ export class ContractService {
     }
   }
 
-  // Create new contract (simple version) - NOW WITH AUTO STREAM START
+  // NEW: Sign a contract
+  static async signContract(params: SignContractParams) {
+    console.log('🔏 Processing contract sign request:', params)
+
+    // 1. Get the contract to validate it exists and get mint address
+    const contract = await this.getContractById(params.contractId)
+    if (!contract) {
+      throw new Error('Contract not found')
+    }
+
+    // 2. Check if contract is still active
+    if (contract.is_completed) {
+      throw new Error('Contract is already completed')
+    }
+
+    // 3. Check if contract has expired
+    const currentTime = new Date().getTime()
+    const expiryTime = new Date(contract.condition2).getTime()
+    if (currentTime > expiryTime) {
+      throw new Error('Contract has expired')
+    }
+
+    // 4. Check if user has already signed this contract
+    const existingUserContract = await UserContractService.getUserContract(
+      params.contractId, 
+      params.userAddress
+    )
+    
+    if (existingUserContract) {
+      throw new Error('User has already signed this contract')
+    }
+
+    // 5. Ensure user exists in database (using basic methods)
+    try {
+      let user = await UserService.getUserByAddress(params.userAddress);
+      if (!user) {
+        console.log('Creating new user:', params.userAddress);
+        user = await UserService.createUser({
+          address: params.userAddress,
+          username: null,
+          bio: null,
+          profile_picture: null
+        });
+      }
+    } catch (userError) {
+      console.warn('User creation/retrieval error:', userError);
+      // Continue anyway - user creation is not critical for contract signing
+    }
+
+    // 6. Check token balance using TokenService
+    console.log('💰 Checking token balance...')
+    const balanceResult = await TokenService.checkUserTokenBalance({
+      mintAddress: contract.mint,
+      userPublicKey: params.userAddress,
+      tokenAmount: params.supply
+    })
+
+    if (!balanceResult.success) {
+      throw new Error(`Failed to verify token balance: ${balanceResult.error}`)
+    }
+
+    if (!balanceResult.hasEnoughBalance) {
+      throw new Error(`Insufficient token balance. ${balanceResult.error || 'You need more tokens to sign this contract.'}`)
+    }
+
+    console.log('✅ Token balance verified')
+
+    // 7. Create user_contract entry
+    console.log('📝 Creating user contract entry...')
+    const userContract = await UserContractService.createUserContract({
+      contract_id: params.contractId,
+      user_address: params.userAddress,
+      supply: params.supply,
+      status: 0 // InProgress
+    })
+
+    console.log('✅ Contract signed successfully:', userContract)
+
+    return {
+      contract,
+      userContract,
+      message: 'Contract signed successfully'
+    }
+  }
+
+  // Create new contract (simple version) - WITH AUTO STREAM START
   static async createContract(contractData: Omit<Contract, 'id' | 'created_at'>): Promise<Contract> {
     console.log('💾 Creating contract in database:', contractData)
     
@@ -192,7 +287,7 @@ export class ContractService {
     return data
   }
 
-  // Create contract with user_contract relationship - ALSO WITH AUTO STREAM START
+  // Create contract with user_contract relationship - WITH AUTO STREAM START
   static async createContractWithUserContract(params: CreateContractParams) {
     console.log('💾 Creating contract with user_contract:', params)
     
@@ -216,6 +311,23 @@ export class ContractService {
     }
 
     console.log('✅ Contract created:', contract)
+
+    // Ensure user exists (using basic methods)
+    try {
+      let user = await UserService.getUserByAddress(params.userAddress);
+      if (!user) {
+        console.log('Creating new user:', params.userAddress);
+        user = await UserService.createUser({
+          address: params.userAddress,
+          username: null,
+          bio: null,
+          profile_picture: null
+        });
+      }
+    } catch (userError) {
+      console.warn('User creation/retrieval error:', userError);
+      // Continue anyway - user creation is not critical for contract creation
+    }
 
     // Then create the user_contract relationship
     const userContractData = {

@@ -35,7 +35,7 @@ export class UserService {
   }
 
   // Create new user
-  static async createUser(userData: Omit<User, 'created_at'>): Promise<User> {
+  static async createUser(userData: Omit<User, 'created_at' | 'score'>): Promise<User> {
     const { data, error } = await supabase
       .from('user')
       .insert([userData])
@@ -82,7 +82,7 @@ export class UserService {
     return this.updateUser(address, { score })
   }
 
-  // NEW: Update user profile (username, bio, profile_picture)
+  // Update user profile (username, bio, profile_picture)
   static async updateUserProfile(address: string, profileData: ProfileUpdateData): Promise<User> {
     // Validate profile data
     if (profileData.username && profileData.username.length > 30) {
@@ -108,7 +108,7 @@ export class UserService {
     return this.updateUser(address, cleanData)
   }
 
-  // NEW: Get or create user (for auto-creation when wallet connects)
+  // Get or create user (for auto-creation when wallet connects)
   static async getOrCreateUser(address: string): Promise<User> {
     let user = await this.getUserByAddress(address)
     
@@ -116,14 +116,16 @@ export class UserService {
       // Create new user with default values
       user = await this.createUser({
         address,
-        score: 0
+        username: null,
+        bio: null,
+        profile_picture: null
       })
     }
     
     return user
   }
 
-  // NEW: Get user with contracts data
+  // Get user with contracts data
   static async getUserWithContracts(address: string): Promise<UserWithContracts | null> {
     const user = await this.getUserByAddress(address)
     if (!user) return null
@@ -152,6 +154,7 @@ export class UserService {
           const contractWithDetails: ContractWithDetails = {
             ...uc.contract,
             user_supply: uc.supply,
+            user_status: uc.status,
             // You can add token metadata here if you have it
             token_symbol: this.getTokenSymbolFromMint(uc.contract.mint),
             token_name: this.getTokenNameFromMint(uc.contract.mint)
@@ -216,7 +219,7 @@ export class UserService {
     return tokenMap[mint] || `Token ${mint.slice(0, 8)}`
   }
 
-  // NEW: Search users by username
+  // Search users by username
   static async searchUsersByUsername(query: string): Promise<User[]> {
     const { data, error } = await supabase
       .from('user')
@@ -232,7 +235,7 @@ export class UserService {
     return data || []
   }
 
-  // NEW: Get leaderboard users (top by score)
+  // Get leaderboard users (top by score)
   static async getLeaderboard(limit: number = 20): Promise<User[]> {
     const { data, error } = await supabase
       .from('user')
@@ -247,7 +250,7 @@ export class UserService {
     return data || []
   }
 
-  // NEW: Get user statistics
+  // Get user statistics
   static async getUserStats(address: string): Promise<{
     totalContracts: number;
     activeContracts: number;
